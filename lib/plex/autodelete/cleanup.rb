@@ -1,15 +1,23 @@
 require "plex/autodelete/version"
 require "plex-ruby"
+require "filesize"
+require "fileutils"
+require "plex/episode"
+require "plex/season"
+require "plex/show"
 
 module Plex
   module Autodelete
     class Cleanup
+      SAFE_MODE_MESSAGE="Running in safe mode, use '--delete' to delete files"
 
       @stats = {
-        skipped: 0,
+        total: 0,
         deleted: 0,
-        kept: 0,
         failed: 0,
+        size: 0,
+        skipped: 0,
+        unwatched: 0
       }
 
       @config = {
@@ -17,26 +25,88 @@ module Plex
         port: 32400,
         token: nil,
         skip: [],
-        delete: true,
+        #delete: false,
         section: 1,
+        cron: false,
+        #verbose: false
       }
 
       @config_keys = @config.keys
 
+      @captured_output = StringIO.new
+      @fileutils = FileUtils::NoWrite
+
       def self.configure(opts = {})
-        opts.each {|key, value| @config[key.to_sym] = value if @config_keys.include? key.to_sym}
+        opts.each { |key, value| @config[key.to_sym] = value }
       end
 
       def self.cleanup
         self.required_params!
+
+        String.disable_colorization = true unless $stdout.isatty
+        if @config[:cron]
+          $stdout = @captured_output
+        end
+
+        puts @config.to_yaml if self.verbose?
+
+        if @config[:delete]
+          @fileutils = FileUtils
+        else
+          puts SAFE_MODE_MESSAGE.green
+        end
+
         self.plex_server.library.section(@config[:section]).all.each do |show|
-          self.process_show show
+          self.increment_stat :total, show.episodes.size
+
+          puts nil if self.verbose?
+          show_name = "#{show.title}".bold + " - "
+
+          if @config[:skip].include? show.title
+            puts show_name + "Skipped".blue if self.verbose?
+            self.increment_stat :skipped, show.episodes.size
+          elsif not show.watched_seasons? and not @config[:daily].include? show.title
+            puts show_name + "Not watched yet".blue if self.verbose?
+            self.increment_stat :unwatched, show.unwatched_episodes.size
+          elsif show.watched_seasons? or @config[:daily].include? show.title
+            #Set automatically forces uniq on an array
+            episodes_to_delete = show.watched_episodes.to_set
+            if @config[:daily].include? show.title
+              episodes_to_delete += show.episodes_older_than(Date.today - @config[:daily_days])
+            end
+            puts show_name + sprintf("Deleting %d/%d episodes\n", episodes_to_delete.size, show.episodes.size)
+            show.episodes.each do |episode|
+              if episodes_to_delete.include? episode
+                self.delete_episode episode
+              elsif self.verbose?
+                puts sprintf("  S%02dE%02d - %s - Not watched yet", episode.season.index, episode.index, episode.title).blue
+              end
+            end
+          end
         end
 
         self.output_stats
+
+        if @config[:cron]
+          if @stats[:deleted] > 0 or @stats[:failed] > 0
+            STDOUT.puts @captured_output.string
+          end
+        end
       end
 
       private
+
+      def self.verbose?
+        if @config[:verbose]
+          true
+        elsif @config[:verbose] == false
+          false
+        elsif @config[:verbose].nil? and @config[:delete]
+          false
+        elsif @config[:verbose].nil?
+          true
+        end
+      end
 
       def self.required_params!
         [:host, :port, :token, :section].each do |param|
@@ -54,73 +124,35 @@ module Plex
         Plex::Server.new(@config[:host], @config[:port])
       end
 
-      def self.process_show show
-        puts nil
-        puts "#{show.title}".bold
-        show_skipped = @config[:skip].include? show.title
-        show.seasons.each do |season|
-          self.process_season season, show_skipped
-        end
-      end
-
-      def self.process_season season, show_skipped
-        puts " - #{season.title}"
-        season.episodes.each do |episode|
-          self.process_episode episode, show_skipped
-        end
-      end
-
-      def self.process_episode episode, show_skipped
-        print "   - #{episode.title} - "
-        if self.should_delete_episode? episode, show_skipped
-          episode.medias.each do |media|
-            self.process_media media, show_skipped
+      def self.delete_episode episode
+        episode_name = sprintf("  S%02dE%02d - %s", episode.season.index, episode.index, episode.title).yellow
+        if File.exist? episode.part_files.first
+          episode.part_files.each do |filename|
+            begin
+              filesize = File.size(filename)
+              @fileutils.rm(filename)
+              puts episode_name
+              self.increment_stat :deleted
+              self.increment_stat :size, filesize
+            rescue Errno::ENOENT => e
+              puts "  Failed - ('#{filename}' not found)".red
+              self.increment_stat :failed
+            rescue Errno::EACCES => e
+              puts "  Failed - ('#{filename}' permission denied)".red
+              self.increment_stat :failed
+            end
           end
         else
-          self.output_episode_skipped_reason episode, show_skipped
+          # Try deleting via the API
+          if episode.delete!
+            puts episode_name
+            self.increment_stat :deleted
+            self.increment_stat :size, episode.parts_size
         end
       end
 
-      def self.should_delete_episode? episode, show_skipped
-        @config[:delete] and not show_skipped and episode_watched? episode
-      end
-
-      def self.output_episode_skipped_reason episode, show_skipped
-        if episode_watched? episode and not @config[:delete]
-          self.increment_stat :skipped
-          puts 'Skipped (Test mode enabled, disable to perform delete)'.blue
-        elsif episode_watched? episode and show_skipped
-          self.increment_stat :skipped
-          puts 'Skipped (Show in skip list)'.blue
-        else
-          self.increment_stat :kept
-          puts 'Not watched yet'.blue
-        end
-      end
-
-      def self.episode_watched? episode
-        episode.respond_to?(:view_count) and episode.view_count.to_i > 0
-      end
-
-      def self.process_media media, show_skipped
-        media.parts.each do |part|
-          self.process_part part, show_skipped
-        end
-      end
-
-      def self.process_part part, show_skipped
-        if File.exist?(part.file)
-          self.increment_stat :deleted
-          File.delete(part.file)
-          puts "Deleted".yellow
-        else
-          self.increment_stat :failed
-          puts "File does not exist".red
-        end
-      end
-
-      def self.increment_stat stat
-        @stats[stat] += 1
+      def self.increment_stat stat, amount=1
+        @stats[stat] += amount
       end
 
       def self.output_stats
@@ -128,10 +160,13 @@ module Plex
         puts '-------------'
         puts '    Stats    '
         puts '-------------'
-        puts "Deleted: #{@stats[:deleted].to_i}"
-        puts "Skipped: #{@stats[:skipped].to_i}"
-        puts "Kept:    #{@stats[:kept].to_i}"
-        puts "Failed:  #{@stats[:failed].to_i}"
+        puts SAFE_MODE_MESSAGE.green unless @config[:delete]
+        puts "Total Episodes:   #{@stats[:total].to_i}"
+        puts "     Unwatched:   #{@stats[:unwatched].to_i}"
+        puts "       Skipped:   #{@stats[:skipped].to_i}".blue
+        puts "       Deleted:   #{@stats[:deleted].to_i}".yellow
+        puts "        Failed:   #{@stats[:failed].to_i}".red if @stats[:failed] > 0
+        puts "          Size:   #{Filesize.from(@stats[:size].to_s + " B").pretty}"
         puts nil
       end
 
