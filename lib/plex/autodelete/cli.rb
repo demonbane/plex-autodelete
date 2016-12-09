@@ -19,14 +19,16 @@ module Plex
         client: "plex-autodelete #{Plex::Autodelete::VERSION}",
       }
 
+      method_option :cron, :aliases => '-c', :desc => "Only produce output if something is done (for use in cron scripts)", :type => :boolean
+      method_option :verbose, :aliases => '-v', :desc => "Print status of all shows (default if --delete is not set)", :type => :boolean
+      method_option :delete, :desc => "Delete old files (must be set in order for files to be deleted)", :type => :boolean, :default => false
+
       desc "cleanup", "Remove all watched episodes from Plex"
       def cleanup
         unless File.exists? @@config_file
           puts "Config file does not exist, please run 'plex-autocomplete install' to generate it".red
           exit
         end
-
-        puts "#{config.to_yaml}\n"
 
         Plex::Autodelete::Cleanup.configure config
         Plex::Autodelete::Cleanup.cleanup
@@ -62,6 +64,7 @@ module Plex
 
       private
 
+      no_commands do
       def write_config
         File.open(@@config_file, "w") { |file|
           YAML.dump(config, file)
@@ -69,7 +72,7 @@ module Plex
       end
 
       def config
-        @@config ||= YAML::load_file(@@config_file)
+        @@config ||= YAML::load_file(@@config_file).merge options
       end
 
       def get_token(username, password)
@@ -92,6 +95,7 @@ module Plex
             hash['user']['authentication_token'].to_s
           end
         end
+      end
       end
     end
   end
