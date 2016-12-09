@@ -8,6 +8,9 @@ require "plex/show"
 
 module Plex
   module Autodelete
+    attr_accessor :fileutils
+    module_function :fileutils, :fileutils=
+
     class Cleanup
       SAFE_MODE_MESSAGE="Running in safe mode, use '--delete' to delete files"
 
@@ -34,7 +37,7 @@ module Plex
       @config_keys = @config.keys
 
       @captured_output = StringIO.new
-      @fileutils = FileUtils::NoWrite
+      Plex::Autodelete.fileutils = FileUtils::NoWrite
 
       def self.configure(opts = {})
         opts.each { |key, value| @config[key.to_sym] = value }
@@ -51,7 +54,7 @@ module Plex
         puts @config.to_yaml if self.verbose?
 
         if @config[:delete]
-          @fileutils = FileUtils
+          Plex::Autodelete.fileutils = FileUtils
         else
           puts SAFE_MODE_MESSAGE.green
         end
@@ -130,7 +133,7 @@ module Plex
           episode.part_files.each do |filename|
             begin
               filesize = File.size(filename)
-              @fileutils.rm(filename)
+              Plex::Autodelete.fileutils.rm(filename)
               puts episode_name
               self.increment_stat :deleted
               self.increment_stat :size, filesize

@@ -11,8 +11,7 @@ module Plex
     end
 
     def delete_episode(episode)
-      #RestClient.delete(episode.url + episode.key, {"X-Plex-Token" => Plex.config.auth_token})
-      puts "Calling RestClient.delete(#{episode.url + episode.key}, {\"X-Plex-Token\" => #{Plex.config.auth_token}})"
+      RestClient.delete(episode.url + episode.key, {"X-Plex-Token" => Plex.config.auth_token}) unless Plex::Autodelete.fileutils == FileUtils::NoWrite
       @episodes.delete(episode)
     rescue RestClient::RequestFailed => e
       puts "  Failed - ('#{episode.title}' API: #{e.message})".red
