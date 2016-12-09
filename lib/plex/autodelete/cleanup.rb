@@ -148,6 +148,9 @@ module Plex
             puts episode_name
             self.increment_stat :deleted
             self.increment_stat :size, episode.parts_size
+          else
+            self.increment_stat :failed
+          end
         end
       end
 
