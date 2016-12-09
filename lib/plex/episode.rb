@@ -13,7 +13,7 @@ module Plex
     end
 
     def parts_size
-      parts.inject { |sum, part| sum + part.size.to_i }
+      parts.inject(0) { |sum, part| sum + part.size.to_i }
     end
 
     def delete!
