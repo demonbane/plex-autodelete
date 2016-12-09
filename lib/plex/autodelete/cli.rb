@@ -21,7 +21,7 @@ module Plex
 
       method_option :cron, :aliases => '-c', :desc => "Only produce output if something is done (for use in cron scripts)", :type => :boolean
       method_option :verbose, :aliases => '-v', :desc => "Print status of all shows (default if --delete is not set)", :type => :boolean
-      method_option :delete, :desc => "Delete old files (must be set in order for files to be deleted)", :type => :boolean, :default => false
+      method_option :delete, :desc => "Delete old files (must be set in order for files to be deleted)", :type => :boolean
 
       desc "cleanup", "Remove all watched episodes from Plex"
       def cleanup
