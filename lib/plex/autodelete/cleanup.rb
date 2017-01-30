@@ -77,7 +77,7 @@ module Plex
             if @config[:daily].include? show.title
               episodes_to_delete += show.episodes_older_than(Date.today - @config[:daily_days])
             end
-            puts show_name + sprintf("Deleting %d/%d episodes\n", episodes_to_delete.size, show.episodes.size)
+            puts show_name + sprintf("Deleting %d/%d episodes\n", episodes_to_delete.size, show.episodes.size) unless episodes_to_delete.empty?
             show.episodes.each do |episode|
               if episodes_to_delete.include? episode
                 self.delete_episode episode
